@@ -1,7 +1,5 @@
 package com.nickeson.scraper;
 
-import java.net.URLConnection;
-
 //JDK 1.8.0
 
 // log4j-1.2.17.jar

@@ -8,11 +8,14 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.io.StringReader;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Properties;
@@ -22,6 +25,7 @@ import javax.swing.text.Element;
 import javax.swing.text.ElementIterator;
 import javax.swing.text.MutableAttributeSet;
 import javax.swing.text.html.HTML;
+import javax.swing.text.html.HTML.Tag;
 import javax.swing.text.html.parser.ParserDelegator;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
@@ -45,12 +49,13 @@ import org.apache.log4j.PropertyConfigurator;
  * updates:
  ****************************************************************************/
 
-public class Scraper {
+public class ScraperOld {
 	protected static Logger log = null;
 	private Properties config = null;
 	private HttpURLConnection baseHttpConnection = null;
 	private int initCnxnStatus = 0;
 	private	String jSessionID = null;
+	private	Element elem = null;
 	public static final String ACCEPT_CHARSET = "acceptCharset";
 	public static final String BASE_DOMAIN = "baseDomain";
 	public static final String BASE_PORT = "basePort";
@@ -58,18 +63,26 @@ public class Scraper {
 	public static final String MENU_PARSE_STRING = "menuParseString";
 	public static final String SESSIONID_PARSE_STRING = "sessionIdParseString";
 	public static final String OUTPUT_DIRECTORY = "outputDirectory";
+	private	HTMLEditorKit kit = new HTMLEditorKit();
+	private	HTMLDocument doc = (HTMLDocument)kit.createDefaultDocument();
+	private	ElementIterator it = new ElementIterator(doc);
 
 	/**
 	 * default constructor needs a predefined properties file to configure Scraper
 	 */
-	public Scraper() {
+	public ScraperOld() {
 		try {
+			// load Scraper config file into Properties Object 'config'
 			FileInputStream fileInput = new FileInputStream("scripts/scraper.properties");
 			config = new Properties();
 			config.load(fileInput);
 			fileInput.close();
+
+			// load log4J configuration & setup Logger
 			PropertyConfigurator.configure(config.getProperty(LOG4J_LOCATION));
 			log = Logger.getLogger("Scraper");
+			
+			// make initial HTTP connection to baseURL, get initial connection status
 			baseHttpConnection = (HttpURLConnection)urlBuilder(
 				config.getProperty(BASE_DOMAIN) + ":" 
 				+ config.getProperty(BASE_PORT)).openConnection();
@@ -98,7 +111,8 @@ public class Scraper {
 		} catch (MalformedURLException e) {
 			log.error("URL is invalid/malformed");
 			e.printStackTrace();
-		} return outURL;
+		}
+		return outURL;
 	}
 	
 	/**
@@ -107,38 +121,58 @@ public class Scraper {
 	 * @param connection the HttpURLConnection Object to use to generate the List of Links
 	 * @return a LinkedHashSet of Links contained in the HttpURLConnection Object
 	 */
-	public Set<String> buildLinksList(URL url) {
-		Set<String> linksList = new LinkedHashSet<>();
-		HTMLEditorKit.Parser parser = new ParserDelegator();
-		try {
-			HttpURLConnection connection = (HttpURLConnection)url.openConnection();
-			if (connection.getResponseCode() == 200) {
-				Reader in = new InputStreamReader(connection.getInputStream());
-				parser.parse(in, new HTMLEditorKit.ParserCallback() {
-					public void handleStartTag(HTML.Tag t, MutableAttributeSet a, int pos) {
-						if (t == HTML.Tag.A) {
-							Object link = a.getAttribute(HTML.Attribute.HREF);
-							if (link != null) linksList.add(String.valueOf(link)); 
-						}
-					}
-				}, true);
-				in.close();
-			} else log.error("Status Code: " + connection.getResponseCode()); 
-		} catch (IOException ioe) {
-			log.error("Unable to store data - connection or filesystem errors");
-			ioe.printStackTrace();
-		} return linksList;
-	}
+//	public Set<String> buildLinksList(HttpURLConnection connection) {
+//		Set<String> linksList = new LinkedHashSet<>();
+//		try {
+//			if (connection.getResponseCode() == 200) {
+//				Reader in = new InputStreamReader(connection.getInputStream());
+//				doc.putProperty("IgnoreCharsetDirective",  Boolean.TRUE);
+//				kit.read(in, doc, 0);
+//				HTMLEditorKit.Parser parser = new ParserDelegator();
+//				parser.parse(in, new HTMLEditorKit.ParserCallback()
+//				{
+//					public void handleStartTag(HTML.Tag t, MutableAttributeSet a, int pos)
+////					{
+	//					if (t == HTML.Tag.A)
+	//					{
+	//						Object link = a.getAttribute(HTML.Attribute.HREF);
+	//						if (link != null)
+	//						{
+	//							linksList.add(String.valueOf(link));
+	//						}
+	//					}
+	//				}
+	//			}, true);
+//				if (HTML.Tag == HTML.Tag.A) {
+//					while ((elem = it.next()) != null) {
+//						String s = (String)elem.getAttributes().getAttribute(HTML.Attribute.HREF);
+//						if (s != null) {
+//							linksList.add(s);
+//						}
+//					}
+//				}
+	//			in.close();
+	//		} else {
+	//			log.error("Status Code: " + connection.getResponseCode());
+	//		}
+	//	} catch (BadLocationException e) {
+	//		log.error("Unable to read from InputStream");
+	//		e.printStackTrace();
+	//	} catch (IOException ioe) {
+	//		log.error("Unable to store data - connection or filesystem errors");
+	//		ioe.printStackTrace();
+	//	}
+	//	return linksList;
+	//}
 	
 	/**
 	 * Extracts all resource links from an HttpURLConnection Object to a unique Set
 	 * @param connection the HttpURLConnection to extract resource links from
 	 * @return a LinkedHashSet of resource Links contained in the HttpURLConnection Object
 	 */
-	public Set<String> buildResourcesList(URL url) {
+	public Set<String> buildResourcesList(HttpURLConnection connection) {
 		Set<String> resourceList = new LinkedHashSet<>();
 		try {
-			HttpURLConnection connection = (HttpURLConnection)url.openConnection();
 			if (connection.getResponseCode() == 200) {
 				Element elem = null;
 				Reader in = new InputStreamReader(connection.getInputStream());
@@ -152,15 +186,20 @@ public class Scraper {
 					if (s != null) {
 						resourceList.add(s);
 					}
-				} in.close();
-			} else log.error("Status Code: " + connection.getResponseCode()); 
+				}
+				in.close();
+				System.out.println("Link Result List: " + resourceList);
+			} else {
+				log.error("Status Code: " + connection.getResponseCode());
+			}
 		} catch (BadLocationException e) {
 			log.error("Unable to read from InputStream");
 			e.printStackTrace();
 		} catch (IOException ioe) {
 			log.error("Unable to store data - connection or filesystem errors");
 			ioe.printStackTrace();
-		} return resourceList;
+		}
+		return resourceList;
 	}
 
 	/**
@@ -175,26 +214,13 @@ public class Scraper {
 				String[] cookieValues = cookie.split("=");
 				String cookieName = cookieValues[0];
 				String cookieValue = cookieValues[1];
-				if (cookieName.equalsIgnoreCase(
-						config.getProperty(SESSIONID_PARSE_STRING))) jSessionID = cookieValue;
+				if (cookieName.equalsIgnoreCase(config.getProperty(SESSIONID_PARSE_STRING))) {
+					jSessionID = cookieValue;
+				}
 			}
-			if (jSessionID == null) log.error("Can't store " + config.getProperty(SESSIONID_PARSE_STRING)); 
-		}
-	}
-	
-	/**
-	 * Sets SESSIONID cookie
-	 * @param url the URL to which to pass the cookie
-	 * @param cookie the cookie to pass to the URL
-	 */
-	public void setSessionIdCookie(URL url, String cookie) {
-		try {
-			HttpURLConnection connection = (HttpURLConnection)url.openConnection();
-			connection.setRequestProperty(config.getProperty(SESSIONID_PARSE_STRING), cookie);
-			connection.connect();
-		} catch (IOException ioe) {
-			log.error("Unable to connect to " + url + " to set SessionIdCookie");
-			ioe.printStackTrace();
+			if (jSessionID == null) {
+				log.error("Can't store " + config.getProperty(SESSIONID_PARSE_STRING));
+			}
 		}
 	}
 
@@ -204,16 +230,21 @@ public class Scraper {
 	 * @param file the location to store the stream data
 	 */
 	public void storeURLData(URL url, String file) {
+		String inputLine = null;
 		try {
 			HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+			BufferedReader in = new BufferedReader(new InputStreamReader(url.openStream()));
+			BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
 			if (connection.getResponseCode() == 200) {
-				BufferedReader in = new BufferedReader(new InputStreamReader(url.openStream()));
-				BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
-				String inputLine = null;
 				while ((inputLine = in.readLine()) != null) {
 					out.write(inputLine + "\n");
-				} in.close(); out.close(); connection.disconnect();  
-			} else log.error("Status Code: " + connection.getResponseCode()); 
+				}
+				in.close();
+				out.close();
+				connection.disconnect();
+			} else {
+				log.error("Status Code: " + connection.getResponseCode());
+			}
 		} catch (IOException ioe) {
 			log.error("Unable to store data - connection or filesystem errors");
 			ioe.printStackTrace();
@@ -222,16 +253,17 @@ public class Scraper {
 	
 	// unit test
 	public static void main(String[] args) {
-		Scraper scraper = new Scraper();
-		scraper.storeSessionIdCookie(); System.out.println(scraper.jSessionID); 
+		ScraperOld scraper = new ScraperOld();
+//		scraper.storeSessionIdCookie();
 
-		URL workingURL = scraper.urlBuilder(scraper.config.getProperty(BASE_DOMAIN) + ":" 
-			+ scraper.config.getProperty(BASE_PORT));
+//		URL workingURL = scraper.urlBuilder(scraper.config.getProperty(BASE_DOMAIN) + ":" 
+//			+ scraper.config.getProperty(BASE_PORT));
 
-		System.out.println("LinksList: " + scraper.buildLinksList(workingURL));
-		System.out.println("ResourcesList: " + scraper.buildResourcesList(workingURL));
+//		System.out.println(scraper.buildLinksList(scraper.baseHttpConnection));
+		scraper.buildResourcesList(scraper.baseHttpConnection);	
+		
+//		scraper.storeURLData(workingURL, scraper.config.getProperty(OUTPUT_DIRECTORY) + "index.html");
 
-		scraper.storeURLData(workingURL, scraper.config.getProperty(OUTPUT_DIRECTORY) + "index.html");
 		scraper.baseHttpConnection.disconnect();
 	}
 }
