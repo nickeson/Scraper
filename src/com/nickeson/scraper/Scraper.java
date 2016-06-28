@@ -44,7 +44,7 @@ import org.apache.log4j.PropertyConfigurator;
  * <b>Copyright:</b> Copyright (c) 2016<p/>
  * <b>Company:</b> Silicon Mountain Technologies<p/>
  * @author nickeson
- * @version 2.0
+ * @version 2.2
  * @since Jun 22, 2016<p/>
  * updates:
  ****************************************************************************/
@@ -56,7 +56,8 @@ public class Scraper {
 	private String outDir = null;
 	private	String sessionCookie = null;
 	private Set<String> linksList = null;
-	private Set<String> resourceList = null;
+	private Set<String> linksListRaw = null;
+	private Set<String> resourcesList = new LinkedHashSet<>();
 	public static final String ACCEPT_CHARSET = "acceptCharset";
 	public static final String BASE_DOMAIN = "baseDomain";
 	public static final String BASE_PORT = "basePort";
@@ -121,6 +122,7 @@ public class Scraper {
 	 */
 	public void buildLinksList(HttpURLConnection connection) {
 		linksList = new LinkedHashSet<>();
+		linksListRaw = new LinkedHashSet<>();
 		HTMLEditorKit.Parser parser = new ParserDelegator();
 		try {
 			Reader in = new InputStreamReader(connection.getInputStream());
@@ -128,6 +130,7 @@ public class Scraper {
 				public void handleStartTag(HTML.Tag t, MutableAttributeSet a, int pos) {
 					if (t == HTML.Tag.A) {
 						Object link = a.getAttribute(HTML.Attribute.HREF);
+						linksListRaw.add("" + link);
 						if (link != null && (!link.toString().startsWith("#"))) {
 							if ((link.toString().toLowerCase().startsWith("http://")) || 
 								(link.toString().toLowerCase().startsWith("https://"))) {
@@ -144,6 +147,33 @@ public class Scraper {
 			ioe.printStackTrace();
 		}
 	}
+
+	/**
+	 * Parses HttpURLConnection for paths to all resources tagged with SRC 
+	 * attribute, stores those resource paths to LinkedHashSet
+	 * @param currConnection the HttpURLConnection to parse
+	 * @throws IOException
+	 * @throws BadLocationException
+	 */
+	public void buildResourcesList(HttpURLConnection currConnection) throws IOException, BadLocationException {
+		Element elem = null;
+		InputStreamReader isr = new InputStreamReader(currConnection.getInputStream());
+		HTMLEditorKit kit = new HTMLEditorKit();
+		HTMLDocument doc = (HTMLDocument)kit.createDefaultDocument();
+		doc.putProperty("IgnoreCharsetDirective", Boolean.TRUE);
+		ElementIterator it = new ElementIterator(doc);
+		kit.read(isr, doc, 0);
+		while ((elem = it.next()) != null) { // store a list of all resources for this page
+			String l = (String)elem.getAttributes().getAttribute(HTML.Attribute.HREF);
+			String s = (String)elem.getAttributes().getAttribute(HTML.Attribute.SRC);
+			if (s != null && (!s.startsWith("//"))) { // remove any links for //maps or //ajax api's
+				resourcesList.add(s);
+			}
+			if (l != null) {
+				resourcesList.add(l);
+			}
+		} isr.close();
+	}
 	
 	/**
 	 * Extracts all resource links from an HttpURLConnection to a unique Set
@@ -154,33 +184,25 @@ public class Scraper {
 		String inputLine = null;
 		BufferedReader br = new BufferedReader(new InputStreamReader(currConnection.getInputStream()));
 		BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
-		while ((inputLine = br.readLine()) != null) { // store all output to file
-			out.write(inputLine + "\n");
+//		log.debug("linksList: " + linksList);
+//		log.debug("linksListRaw: " + linksListRaw);
+		while ((inputLine = br.readLine()) != null) {
+//			for (String linkRaw : linksListRaw) {
+//				if (inputLine.contains(linkRaw) && (linkRaw != null && linkRaw != "")
+//						&& (!linkRaw.equals("#")) && (!linkRaw.equals(config.getProperty(BASE_DOMAIN)))) {
+//					log.debug("linkRaw: " + linkRaw);
+//					log.debug("inputLinePre: " + inputLine);
+//					inputLine = inputLine.replace(linkRaw, (linkRaw + linkRaw + ".html"));
+//					log.debug("inputLinePost: " + inputLine);
+//				}
+//			}
+			for (String resource : resourcesList) {
+				if (inputLine.contains(resource)) {
+					inputLine = inputLine.replace(resource, (config.getProperty(BASE_DOMAIN) + resource));
+				}
+			} 
+			out.write(inputLine + "\r\n"); 
 		} out.close();
-	}
-
-	/**
-	 * Parses HttpURLConnection for paths to all resources tagged with SRC 
-	 * attribute, stores those resource paths to LinkedHashSet
-	 * @param currConnection the HttpURLConnection to parse
-	 * @throws IOException
-	 * @throws BadLocationException
-	 */
-	public void parseURLData(HttpURLConnection currConnection) throws IOException, BadLocationException {
-		Element elem = null;
-		InputStreamReader isr = new InputStreamReader(currConnection.getInputStream());
-		HTMLEditorKit kit = new HTMLEditorKit();
-		HTMLDocument doc = (HTMLDocument)kit.createDefaultDocument();
-		doc.putProperty("IgnoreCharsetDirective", Boolean.TRUE);
-		ElementIterator it = new ElementIterator(doc);
-		resourceList = new LinkedHashSet<>();	
-		kit.read(isr, doc, 0);
-		while ((elem = it.next()) != null) { // store a list of all resources for this page
-			String s = (String)elem.getAttributes().getAttribute(HTML.Attribute.SRC);
-			if (s != null) {
-				resourceList.add(s);
-			}
-		} isr.close();
 	}
 	
 	/**
@@ -194,6 +216,7 @@ public class Scraper {
 		String fileName = null;
 		String path = null;
 		String finalOutFile = null;
+//		String storePath = null;
 		Path pathToFile = null;
 		try {
 			for (String link : scraper.linksList) {
@@ -201,7 +224,7 @@ public class Scraper {
 				currConnection = resourceURL.openConnection();
 				currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
 				if (((HttpURLConnection)currConnection).getResponseCode() == 200) {
-					scraper.parseURLData((HttpURLConnection)currConnection); // auto-closes connection
+					scraper.buildResourcesList((HttpURLConnection)currConnection); // auto-closes connection
 					currConnection = resourceURL.openConnection();
 					currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
 					path = resourceURL.getPath();
@@ -210,40 +233,30 @@ public class Scraper {
 						if ((fileName.endsWith(".png")) || fileName.endsWith(".jpg")) {
 							finalOutFile = fileName;
 							pathToFile = Paths.get(scraper.outDir + fileName);
+//							storePath = scraper.outDir + fileName;
 						} else {
 							finalOutFile = fileName.substring(fileName.lastIndexOf("/") + 1);
 							pathToFile = Paths.get(scraper.outDir + path + "/" + finalOutFile + ".html");	
+//							storePath = scraper.outDir + path.toString() + "/" + finalOutFile + ".html";	
+							log.debug("finalOutFile: " + finalOutFile);
+							log.debug("pathToFile: " + pathToFile);
+//							log.debug("storePath: " + storePath);
 						}
 					} else {
 						if (path == null || path.equals("")) {
 							finalOutFile = "/index.html";
 							pathToFile = Paths.get(scraper.outDir + path + finalOutFile);
+//							storePath = scraper.outDir + path.toString() + finalOutFile;
 						} else {
 							finalOutFile = fileName + ".html";
 							pathToFile = Paths.get(scraper.outDir + path + finalOutFile);
+//							storePath = scraper.outDir + path.toString() + finalOutFile;
 						}
 					}
-					log.debug("pathToFile: " + pathToFile);
 					Files.createDirectories(pathToFile.getParent());
 					scraper.storeURLData((HttpURLConnection)currConnection, "" + pathToFile); // auto-closes connection
+//					scraper.storeURLData((HttpURLConnection)currConnection, storePath); // auto-closes connection
 				} else log.error("Status Code: " + ((HttpURLConnection)currConnection).getResponseCode());
-			}
-			log.debug("resourceList: " + scraper.resourceList);
-			// loop through all remaining resources & save them to filesystem
-			for (String link : scraper.resourceList) {
-				resourceURL = new URL(scraper.config.getProperty(BASE_DOMAIN) + link);
-				log.debug("resourceURL: " + resourceURL);
-				currConnection = resourceURL.openConnection();
-				currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
-				if (((HttpURLConnection)currConnection).getResponseCode() == 200) {
-					path = resourceURL.getPath();
-					fileName = resourceURL.getFile();
-					log.debug("fileName: " + fileName);
-					pathToFile = Paths.get(scraper.outDir + fileName);
-					log.debug("pathToFile(resource) " + pathToFile);
-					Files.createDirectories(pathToFile.getParent());
-					scraper.storeURLData((HttpURLConnection)currConnection, "" + pathToFile);
-				}
 			}
 		} catch (IOException | BadLocationException e) {
 			log.error("I/O or BadLocationException");
