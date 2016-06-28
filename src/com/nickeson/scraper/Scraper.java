@@ -130,8 +130,10 @@ public class Scraper {
 				public void handleStartTag(HTML.Tag t, MutableAttributeSet a, int pos) {
 					if (t == HTML.Tag.A) {
 						Object link = a.getAttribute(HTML.Attribute.HREF);
-						linksListRaw.add("" + link);
 						if (link != null && (!link.toString().startsWith("#"))) {
+							if ((!link.toString().endsWith(".png")) && (!link.toString().endsWith(".jpg"))) {
+								linksListRaw.add("" + link);
+							}
 							if ((link.toString().toLowerCase().startsWith("http://")) || 
 								(link.toString().toLowerCase().startsWith("https://"))) {
 								linksList.add("" + link);
@@ -149,7 +151,7 @@ public class Scraper {
 	}
 
 	/**
-	 * Parses HttpURLConnection for paths to all resources tagged with SRC 
+	 * Parses HttpURLConnection for paths to all resources tagged with SRC or HREF
 	 * attribute, stores those resource paths to LinkedHashSet
 	 * @param currConnection the HttpURLConnection to parse
 	 * @throws IOException
@@ -176,26 +178,34 @@ public class Scraper {
 	}
 	
 	/**
-	 * Extracts all resource links from an HttpURLConnection to a unique Set
-	 * @param currConnection the HttpURLConnection from which to extract resource links
-	 * @throws IOException 
+	 * Stores all data for a given HttpURLConnection to the specified file 
+	 * @param currConnection the HttpURLConnection from which to store data
+	 * @param file the file on the filesystem to which data is stored
+	 * @throws IOException
 	 */
 	public void storeURLData(HttpURLConnection currConnection, String file) throws IOException {
 		String inputLine = null;
+		String inputLineMod = null;
+		String suffix = null;
+		String replaceString = null;
 		BufferedReader br = new BufferedReader(new InputStreamReader(currConnection.getInputStream()));
 		BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
-//		log.debug("linksList: " + linksList);
-//		log.debug("linksListRaw: " + linksListRaw);
 		while ((inputLine = br.readLine()) != null) {
-//			for (String linkRaw : linksListRaw) {
-//				if (inputLine.contains(linkRaw) && (linkRaw != null && linkRaw != "")
-//						&& (!linkRaw.equals("#")) && (!linkRaw.equals(config.getProperty(BASE_DOMAIN)))) {
-//					log.debug("linkRaw: " + linkRaw);
-//					log.debug("inputLinePre: " + inputLine);
-//					inputLine = inputLine.replace(linkRaw, (linkRaw + linkRaw + ".html"));
-//					log.debug("inputLinePost: " + inputLine);
-//				}
-//			}
+			for (String currLink : linksListRaw) {
+				if (inputLine.contains(("href=\"" + currLink + "\">")) && 
+						(!inputLine.contains("http://")) && (!currLink.equals("#"))) {
+					// add code to modify inputLine to link to actual filename
+					// use substring to get filename from last folder & tack on
+					suffix = currLink.substring(currLink.lastIndexOf("/") + 1);
+//					log.debug("currLink: " + currLink);
+					replaceString = "." + currLink + "/" + suffix + ".html";
+//					log.debug("inputLine: " + inputLine);
+//					log.debug("replaceString: " + replaceString);
+//					inputLineMod = inputLine.replace(currLink, replaceString);
+//					log.debug("inputLineMod: " + inputLineMod);
+					inputLine = inputLine.replace(currLink, replaceString);
+				}
+			}
 			for (String resource : resourcesList) {
 				if (inputLine.contains(resource)) {
 					inputLine = inputLine.replace(resource, (config.getProperty(BASE_DOMAIN) + resource));
@@ -216,8 +226,9 @@ public class Scraper {
 		String fileName = null;
 		String path = null;
 		String finalOutFile = null;
-//		String storePath = null;
 		Path pathToFile = null;
+//		log.debug("linksList: " + scraper.linksList);
+//		log.debug("linksListRaw: " + scraper.linksListRaw);	
 		try {
 			for (String link : scraper.linksList) {
 				resourceURL = new URL(link);	
@@ -233,31 +244,28 @@ public class Scraper {
 						if ((fileName.endsWith(".png")) || fileName.endsWith(".jpg")) {
 							finalOutFile = fileName;
 							pathToFile = Paths.get(scraper.outDir + fileName);
-//							storePath = scraper.outDir + fileName;
 						} else {
 							finalOutFile = fileName.substring(fileName.lastIndexOf("/") + 1);
 							pathToFile = Paths.get(scraper.outDir + path + "/" + finalOutFile + ".html");	
-//							storePath = scraper.outDir + path.toString() + "/" + finalOutFile + ".html";	
-							log.debug("finalOutFile: " + finalOutFile);
-							log.debug("pathToFile: " + pathToFile);
-//							log.debug("storePath: " + storePath);
 						}
 					} else {
 						if (path == null || path.equals("")) {
 							finalOutFile = "/index.html";
 							pathToFile = Paths.get(scraper.outDir + path + finalOutFile);
-//							storePath = scraper.outDir + path.toString() + finalOutFile;
 						} else {
 							finalOutFile = fileName + ".html";
 							pathToFile = Paths.get(scraper.outDir + path + finalOutFile);
-//							storePath = scraper.outDir + path.toString() + finalOutFile;
 						}
 					}
-					Files.createDirectories(pathToFile.getParent());
+					// build folders up to location of file (if they don't already exist)
+					Files.createDirectories(pathToFile.getParent()); 
+					// store file
 					scraper.storeURLData((HttpURLConnection)currConnection, "" + pathToFile); // auto-closes connection
-//					scraper.storeURLData((HttpURLConnection)currConnection, storePath); // auto-closes connection
 				} else log.error("Status Code: " + ((HttpURLConnection)currConnection).getResponseCode());
 			}
+//			for (String currLink : scraper.linksListRaw) {
+//				log.debug(currLink);
+//			}
 		} catch (IOException | BadLocationException e) {
 			log.error("I/O or BadLocationException");
 			e.printStackTrace();
