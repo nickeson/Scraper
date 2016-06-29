@@ -76,6 +76,7 @@ public class Scraper {
 			config.load(fileInput);
 			fileInput.close();
 			PropertyConfigurator.configure(config.getProperty(LOG4J_LOCATION));
+			outDir = config.getProperty(OUTPUT_DIRECTORY);
 			log = Logger.getLogger("Scraper");
 			connection = (HttpURLConnection)(new URL(
 				config.getProperty(BASE_DOMAIN) + ":" 
@@ -83,7 +84,6 @@ public class Scraper {
 			if (connection.getResponseCode() == 200) {
 				storeSessionIdCookie(); // create persistent session cookie
 				buildLinksList(connection); // builds list of menu URLs to parse/store
-				outDir = config.getProperty(OUTPUT_DIRECTORY);
 			} else log.error("Status Code: " + connection.getResponseCode()); 
 		} catch (FileNotFoundException e) {
 			log.error("Properties File Not Found");
@@ -131,13 +131,25 @@ public class Scraper {
 					if (t == HTML.Tag.A) {
 						Object link = a.getAttribute(HTML.Attribute.HREF);
 						if (link != null && (!link.toString().startsWith("#"))) {
-							if ((!link.toString().endsWith(".png")) && (!link.toString().endsWith(".jpg"))) {
+//							if ((!link.toString().endsWith(".png")) && (!link.toString().endsWith(".jpg"))) { // need cleaner filter
+//								linksListRaw.add("" + link);
+//							}
+//							if ((link.toString().toLowerCase().startsWith("http://")) || 
+//								(link.toString().toLowerCase().startsWith("https://"))) {
+//								linksListRaw.add("" + link);
+//								linksList.add("" + link);
+//							} else {
+//								linksList.add(config.getProperty(BASE_DOMAIN) + link);
+//							}
+							if ((!link.toString().endsWith(".png")) && (!link.toString().endsWith(".jpg"))) { // need cleaner filter
 								linksListRaw.add("" + link);
 							}
 							if ((link.toString().toLowerCase().startsWith("http://")) || 
 								(link.toString().toLowerCase().startsWith("https://"))) {
+//								linksListRaw.add("" + link);
 								linksList.add("" + link);
 							} else {
+//								linksListRaw.add(config.getProperty(BASE_DOMAIN) + link);
 								linksList.add(config.getProperty(BASE_DOMAIN) + link);
 							}
 						}
@@ -165,15 +177,16 @@ public class Scraper {
 		doc.putProperty("IgnoreCharsetDirective", Boolean.TRUE);
 		ElementIterator it = new ElementIterator(doc);
 		kit.read(isr, doc, 0);
-		while ((elem = it.next()) != null) { // store a list of all resources for this page
+		while ((elem = it.next()) != null) {
 			String l = (String)elem.getAttributes().getAttribute(HTML.Attribute.HREF);
 			String s = (String)elem.getAttributes().getAttribute(HTML.Attribute.SRC);
-			if (s != null && (!s.startsWith("//"))) { // remove any links for //maps or //ajax api's
+			if (s != null && (!s.startsWith("//"))) { // don't include links for //maps or //ajax api's
 				resourcesList.add(s);
 			}
 			if (l != null) {
 				resourcesList.add(l);
 			}
+			// add code here to find missing script for msi
 		} isr.close();
 	}
 	
@@ -185,30 +198,42 @@ public class Scraper {
 	 */
 	public void storeURLData(HttpURLConnection currConnection, String file) throws IOException {
 		String inputLine = null;
-		String inputLineMod = null;
 		String suffix = null;
 		String replaceString = null;
+//		int subdirCount = 0;
 		BufferedReader br = new BufferedReader(new InputStreamReader(currConnection.getInputStream()));
 		BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
+		log.debug("file: " + file);
 		while ((inputLine = br.readLine()) != null) {
 			for (String currLink : linksListRaw) {
 				if (inputLine.contains(("href=\"" + currLink + "\">")) && 
-						(!inputLine.contains("http://")) && (!currLink.equals("#"))) {
-					// add code to modify inputLine to link to actual filename
-					// use substring to get filename from last folder & tack on
+						(!inputLine.contains("http://") && !inputLine.contains("https://")) && (!currLink.equals("#"))) {
 					suffix = currLink.substring(currLink.lastIndexOf("/") + 1);
-//					log.debug("currLink: " + currLink);
-					replaceString = "." + currLink + "/" + suffix + ".html";
+//					subdirCount = 0;
+//					for(int i = 0; i < currLink.length(); i++) {
+//					    if(currLink.charAt(i) == '/') {
+//					        subdirCount++;
+//					    } 
+//					}
+//					log.debug("subdirCount: " + subdirCount);
+//					if (subdirCount == 1) {
+//						replaceString = "." + "/" + suffix + ".html"; // modify to relative links on filesystem: input pathToFile
+//					} else {
+//						if (subdirCount > 1) {
+							replaceString = "." + currLink + "/" + suffix + ".html"; // modify to relative links on filesystem: input pathToFile
+//						}
+//					}
 //					log.debug("inputLine: " + inputLine);
 //					log.debug("replaceString: " + replaceString);
-//					inputLineMod = inputLine.replace(currLink, replaceString);
-//					log.debug("inputLineMod: " + inputLineMod);
 					inputLine = inputLine.replace(currLink, replaceString);
+//					log.debug("outputLine: " + inputLine);
 				}
 			}
 			for (String resource : resourcesList) {
-				if (inputLine.contains(resource)) {
-					inputLine = inputLine.replace(resource, (config.getProperty(BASE_DOMAIN) + resource));
+				if (!(resource.contains("http://") || resource.contains("https://"))) {
+					if (inputLine.contains(resource)) {
+						inputLine = inputLine.replace(resource, (config.getProperty(BASE_DOMAIN) + resource));
+					}
 				}
 			} 
 			out.write(inputLine + "\r\n"); 
@@ -227,8 +252,6 @@ public class Scraper {
 		String path = null;
 		String finalOutFile = null;
 		Path pathToFile = null;
-//		log.debug("linksList: " + scraper.linksList);
-//		log.debug("linksListRaw: " + scraper.linksListRaw);	
 		try {
 			for (String link : scraper.linksList) {
 				resourceURL = new URL(link);	
@@ -263,12 +286,11 @@ public class Scraper {
 					scraper.storeURLData((HttpURLConnection)currConnection, "" + pathToFile); // auto-closes connection
 				} else log.error("Status Code: " + ((HttpURLConnection)currConnection).getResponseCode());
 			}
-//			for (String currLink : scraper.linksListRaw) {
-//				log.debug(currLink);
-//			}
 		} catch (IOException | BadLocationException e) {
 			log.error("I/O or BadLocationException");
 			e.printStackTrace();
 		}
+		log.debug("linksList: " + scraper.linksList);
+		log.debug("linksListRaw: " + scraper.linksListRaw);	
 	}
 }
