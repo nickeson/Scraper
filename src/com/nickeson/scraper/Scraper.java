@@ -56,7 +56,8 @@ public class Scraper {
 	private String outDir = null;
 	private	String sessionCookie = null;
 	private Set<String> linksList = null;
-	private Set<String> linksListRaw = null;
+	private Set<String> linksParseList = null;
+	private Set<String> linksListAbs = null;
 	private Set<String> resourcesList = new LinkedHashSet<>();
 	public static final String ACCEPT_CHARSET = "acceptCharset";
 	public static final String BASE_DOMAIN = "baseDomain";
@@ -84,6 +85,7 @@ public class Scraper {
 			if (connection.getResponseCode() == 200) {
 				storeSessionIdCookie(); // create persistent session cookie
 				buildLinksList(connection); // builds list of menu URLs to parse/store
+				log.debug("linksListAbs: " + linksListAbs);
 			} else log.error("Status Code: " + connection.getResponseCode()); 
 		} catch (FileNotFoundException e) {
 			log.error("Properties File Not Found");
@@ -122,7 +124,8 @@ public class Scraper {
 	 */
 	public void buildLinksList(HttpURLConnection connection) {
 		linksList = new LinkedHashSet<>();
-		linksListRaw = new LinkedHashSet<>();
+		linksParseList = new LinkedHashSet<>();
+		linksListAbs = new LinkedHashSet<>();	
 		HTMLEditorKit.Parser parser = new ParserDelegator();
 		try {
 			Reader in = new InputStreamReader(connection.getInputStream());
@@ -131,26 +134,16 @@ public class Scraper {
 					if (t == HTML.Tag.A) {
 						Object link = a.getAttribute(HTML.Attribute.HREF);
 						if (link != null && (!link.toString().startsWith("#"))) {
-//							if ((!link.toString().endsWith(".png")) && (!link.toString().endsWith(".jpg"))) { // need cleaner filter
-//								linksListRaw.add("" + link);
-//							}
-//							if ((link.toString().toLowerCase().startsWith("http://")) || 
-//								(link.toString().toLowerCase().startsWith("https://"))) {
-//								linksListRaw.add("" + link);
-//								linksList.add("" + link);
-//							} else {
-//								linksList.add(config.getProperty(BASE_DOMAIN) + link);
-//							}
 							if ((!link.toString().endsWith(".png")) && (!link.toString().endsWith(".jpg"))) { // need cleaner filter
-								linksListRaw.add("" + link);
-							}
-							if ((link.toString().toLowerCase().startsWith("http://")) || 
-								(link.toString().toLowerCase().startsWith("https://"))) {
-								linksListRaw.add("" + link);
-								linksList.add("" + link);
-							} else {
-//								linksListRaw.add(config.getProperty(BASE_DOMAIN) + link);
-								linksList.add(config.getProperty(BASE_DOMAIN) + link);
+								linksParseList.add("" + link);
+								if ((link.toString().toLowerCase().startsWith("http://")) || 
+									(link.toString().toLowerCase().startsWith("https://"))) {
+									linksParseList.add("" + link);
+									linksList.add("" + link);
+									linksListAbs.add("" + link); // keep a list of absolute links from this domain
+								} else {
+									linksList.add(config.getProperty(BASE_DOMAIN) + link);
+								}
 							}
 						}
 					}
@@ -186,7 +179,7 @@ public class Scraper {
 			if (l != null) {
 				resourcesList.add(l);
 			}
-			// add code here to find missing script for msi
+			// add code here to add missing script resource for msi
 		} isr.close();
 	}
 	
@@ -200,35 +193,35 @@ public class Scraper {
 		String inputLine = null;
 		String suffix = null;
 		String replaceString = null;
-//		int subdirCount = 0;
+		String resPath = currConnection.getURL().getPath();
 		BufferedReader br = new BufferedReader(new InputStreamReader(currConnection.getInputStream()));
 		BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
 		log.debug("file: " + file);
+		log.debug("resPath: " + resPath);
 		while ((inputLine = br.readLine()) != null) {
-			for (String currLink : linksListRaw) {
+			// modify absolute URLs contained in linksListAbs
+//			for (String newLink : linksParseList) {
+//				if (inputLine.contains(("href=\"" + newLink + "\"")) && (!newLink.equals("#"))) {
+					
+//				}
+//				if (inputLine.contains(linkAbs)) {
+//					log.debug("linkAbs: " + linkAbs);
+//					log.debug("inputLinePre: " + inputLine);
+//					inputLine = inputLine.replace(config.getProperty(BASE_DOMAIN), ".");
+//					inputLine = inputLine + resPath + ".html";
+//					log.debug("inputLinePost: " + inputLine);
+//				}
+//			}
+			// for non-absolute links on linksParseList, modify path to proper file
+			for (String currLink : linksParseList) {
 				if (inputLine.contains(("href=\"" + currLink + "\">")) && 
-						(!inputLine.contains("http://") && !inputLine.contains("https://")) && (!currLink.equals("#"))) {
+						(!inputLine.contains("http://") && !inputLine.contains("https://"))) {
 					suffix = currLink.substring(currLink.lastIndexOf("/") + 1);
-//					subdirCount = 0;
-//					for(int i = 0; i < currLink.length(); i++) {
-//					    if(currLink.charAt(i) == '/') {
-//					        subdirCount++;
-//					    } 
-//					}
-//					log.debug("subdirCount: " + subdirCount);
-//					if (subdirCount == 1) {
-//						replaceString = "." + "/" + suffix + ".html"; // modify to relative links on filesystem: input pathToFile
-//					} else {
-//						if (subdirCount > 1) {
-							replaceString = "." + currLink + "/" + suffix + ".html"; // modify to relative links on filesystem: input pathToFile
-//						}
-//					}
-//					log.debug("inputLine: " + inputLine);
-//					log.debug("replaceString: " + replaceString);
+					replaceString = "." + currLink + "/" + suffix + ".html"; // modify to relative links on filesystem: input pathToFile
 					inputLine = inputLine.replace(currLink, replaceString);
-//					log.debug("outputLine: " + inputLine);
 				}
 			}
+			// for non-absolute URLs on resourcesList, add base domain to URL
 			for (String resource : resourcesList) {
 				if (!(resource.contains("http://") || resource.contains("https://"))) {
 					if (inputLine.contains(resource)) {
@@ -246,23 +239,23 @@ public class Scraper {
 	 */
 	public static void main(String[] args) {
 		Scraper scraper = new Scraper();
-		URL resourceURL = null;
+		URL currURL = null;
 		URLConnection currConnection = null;
 		String fileName = null;
 		String path = null;
 		String finalOutFile = null;
 		Path pathToFile = null;
 		try {
-			for (String link : scraper.linksList) {
-				resourceURL = new URL(link);	
-				currConnection = resourceURL.openConnection();
+			for (String link : scraper.linksList) { // list of links from base_domain page
+				currURL = new URL(link);	
+				currConnection = currURL.openConnection();
 				currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
 				if (((HttpURLConnection)currConnection).getResponseCode() == 200) {
 					scraper.buildResourcesList((HttpURLConnection)currConnection); // auto-closes connection
-					currConnection = resourceURL.openConnection();
+					currConnection = currURL.openConnection();
 					currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
-					path = resourceURL.getPath();
-					fileName = resourceURL.getFile();
+					path = currURL.getPath();
+					fileName = currURL.getFile();
 					if (path.equalsIgnoreCase(fileName) && ((!path.equals("") && path != null))) {
 						if ((fileName.endsWith(".png")) || fileName.endsWith(".jpg")) {
 							finalOutFile = fileName;
@@ -291,6 +284,7 @@ public class Scraper {
 			e.printStackTrace();
 		}
 		log.debug("linksList: " + scraper.linksList);
-		log.debug("linksListRaw: " + scraper.linksListRaw);	
+		log.debug("linksParseList: " + scraper.linksParseList);	
+		log.debug("linksListAbs: " + scraper.linksListAbs);		
 	}
 }
