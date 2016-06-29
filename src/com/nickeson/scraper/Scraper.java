@@ -146,7 +146,7 @@ public class Scraper {
 							}
 							if ((link.toString().toLowerCase().startsWith("http://")) || 
 								(link.toString().toLowerCase().startsWith("https://"))) {
-//								linksListRaw.add("" + link);
+								linksListRaw.add("" + link);
 								linksList.add("" + link);
 							} else {
 //								linksListRaw.add(config.getProperty(BASE_DOMAIN) + link);
