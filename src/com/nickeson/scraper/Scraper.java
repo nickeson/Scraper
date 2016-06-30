@@ -54,10 +54,12 @@ public class Scraper {
 	private	Path pathToFile = null;
 	private Properties config = null;
 	private HttpURLConnection connection = null;
+	private String connectPath = null;
 	private	String fileName = null;
 	private	String finalOutFile = null;
 	private String outDir = null;
 	private	String sessionCookie = null;
+	private	String suffix = null;
 	private Set<String> linksToScrape = new LinkedHashSet<>();
 	private Set<String> menuLinksList = new LinkedHashSet<>();
 	private Set<String> resourcesList = new LinkedHashSet<>();
@@ -104,7 +106,7 @@ public class Scraper {
 	 * Store JSESSIONID cookie
 	 * @throws IOException 
 	 */
-	public void storeSessionIdCookie() throws IOException {
+	protected void storeSessionIdCookie() throws IOException {
 		List<String> rawCookies = connection.getHeaderFields().get("Set-Cookie");
 		for (String rawCookie : rawCookies) {
 			String[] cookies = rawCookie.split("; ");
@@ -123,7 +125,7 @@ public class Scraper {
 	 * Uses a seed HttpURLConnection to generate lists of Links contained in the seed
 	 * @param connection the HttpURLConnection to use to generate the lists of links
 	 */
-	public void buildLinksLists(HttpURLConnection connection) {
+	protected void buildLinksLists(HttpURLConnection connection) {
 		HTMLEditorKit.Parser parser = new ParserDelegator();
 		try {
 			Reader in = new InputStreamReader(connection.getInputStream());
@@ -157,7 +159,7 @@ public class Scraper {
 	 * @throws IOException
 	 * @throws BadLocationException
 	 */
-	public void buildResourcesList(HttpURLConnection currConnection) throws IOException, BadLocationException {
+	protected void buildResourcesList(HttpURLConnection currConnection) throws IOException, BadLocationException {
 		Element elem = null;
 		InputStreamReader isr = new InputStreamReader(currConnection.getInputStream());
 		HTMLEditorKit kit = new HTMLEditorKit();
@@ -177,51 +179,72 @@ public class Scraper {
 			// add code here to add missing msi / IE compatibility script resource
 		} isr.close(); // closes upstream connection too
 	}
+
+	/**
+	 * format menu links for paths to work properly (locally) when scraped
+	 * @param inputString the current line of input from the file being scraped
+	 * @param path the path component of the URL being scraped
+	 * @return a modified input line with reformatted links
+	 */
+	protected String menuLinkFormatter(String inputString, String cnxnPath) {
+	String replaceString = null;
+		for (String currLink : menuLinksList) {
+			if (inputString.contains(("href=\"" + config.getProperty(BASE_DOMAIN) + "\">"))) {
+				inputString = inputString.replace((config.getProperty(BASE_DOMAIN) + "\""), "./index.html\"");
+			}
+			// add code here to fix links like: http://www.siliconmtn.com/innovation/technical-consulting (2 or more subdirs deep)
+			if (inputString.contains(("href=\"" + currLink + "\">"))) {
+				suffix = currLink.substring(currLink.lastIndexOf("/") + 1);
+				if (inputString.contains("http://") || inputString.contains("https://")) {
+					replaceString = "." + cnxnPath + "/" + suffix + "/" + suffix + ".html";
+				} else {
+					replaceString = "." + currLink + "/" + suffix + ".html";
+				}
+				inputString = inputString.replace(currLink, replaceString);
+			}
+		}
+		return inputString;
+	}
 	
+	/**
+	 * format resource links for paths to work properly (locally) when scraped
+	 * @param inString the current line of input from the file being scraped
+	 * @return a modified input line with reformatted links
+	 */
+	protected String resourceListFormatter(String inString) {
+		for (String resource : resourcesList) {
+			if (!(resource.contains("http://") || resource.contains("https://"))) {
+				if (inString.contains(resource)) {
+					inString = inString.replace(resource, (config.getProperty(BASE_DOMAIN) + resource));
+				}
+			}
+		}
+		return inString;
+	}
+
 	/**
 	 * Stores all data for a given HttpURLConnection to the specified file 
 	 * @param currConnection the HttpURLConnection from which to store data
 	 * @param file the file on the filesystem to which data is stored
 	 * @throws IOException
 	 */
-	public void storeURLData(HttpURLConnection currConnection, String file) throws IOException {
+	protected void storeURLData(HttpURLConnection currConnection, String file) throws IOException {
 		String inputLine = null;
-		String suffix = null;
-		String replaceString = null;
 		BufferedReader br = new BufferedReader(new InputStreamReader(currConnection.getInputStream()));
 		BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
 		while ((inputLine = br.readLine()) != null) {
-			for (String currLink : menuLinksList) {
-				if (inputLine.contains(("href=\"" + config.getProperty(BASE_DOMAIN) + "\">"))) {
-					inputLine = inputLine.replace((config.getProperty(BASE_DOMAIN) + "\""), "./index.html\"");
-				}
-				// add code here to fix links like: http://www.siliconmtn.com/innovation/technical-consulting (2 or more subdirs deep)
-				if (inputLine.contains(("href=\"" + currLink + "\">"))) {
-					suffix = currLink.substring(currLink.lastIndexOf("/") + 1);
-					if (inputLine.contains("http://") || inputLine.contains("https://")) {
-						replaceString = "." + currConnection.getURL().getPath() + "/" + suffix + "/" + suffix + ".html";
-					} else {
-						replaceString = "." + currLink + "/" + suffix + ".html";
-					}
-					inputLine = inputLine.replace(currLink, replaceString);
-				}
-			}
-			for (String resource : resourcesList) { // for non-absolute URLs on resourceList
-				if (!(resource.contains("http://") || resource.contains("https://"))) {
-					if (inputLine.contains(resource)) {
-						inputLine = inputLine.replace(resource, (config.getProperty(BASE_DOMAIN) + resource));
-					}
-				}
-			}
+		connectPath = currConnection.getURL().getPath();
+			inputLine = menuLinkFormatter(inputLine, connectPath);
+			inputLine = resourceListFormatter(inputLine);
 			out.write(inputLine + "\r\n"); 
 		} out.close();
 	}
-
+	
 	/**
 	 * Format given path to work on local filesystem copy of files
 	 * @param currPath the path to format
 	 */
-	public void pathFormatter(String currPath) {
+	protected void pathFormatter(String currPath) {
 		if (currPath.equalsIgnoreCase(fileName) && ((!currPath.equals("") && currPath != null))) {
 			if ((fileName.endsWith(".png")) || fileName.endsWith(".jpg")) {
 				finalOutFile = fileName;
