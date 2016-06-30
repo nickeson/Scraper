@@ -44,19 +44,22 @@ import org.apache.log4j.PropertyConfigurator;
  * <b>Copyright:</b> Copyright (c) 2016<p/>
  * <b>Company:</b> Silicon Mountain Technologies<p/>
  * @author nickeson
- * @version 2.2
+ * @version 2.5
  * @since Jun 22, 2016<p/>
  * updates:
  ****************************************************************************/
 
 public class Scraper {
 	protected static Logger log = null;
+	private	Path pathToFile = null;
 	private Properties config = null;
 	private HttpURLConnection connection = null;
+	private	String fileName = null;
+	private	String finalOutFile = null;
 	private String outDir = null;
 	private	String sessionCookie = null;
-	private Set<String> linksList = null;
-	private Set<String> menuLinksList = null;
+	private Set<String> linksToScrape = new LinkedHashSet<>();
+	private Set<String> menuLinksList = new LinkedHashSet<>();
 	private Set<String> resourcesList = new LinkedHashSet<>();
 	public static final String ACCEPT_CHARSET = "acceptCharset";
 	public static final String BASE_DOMAIN = "baseDomain";
@@ -67,7 +70,7 @@ public class Scraper {
 	public static final String OUTPUT_DIRECTORY = "outputDirectory";
 
 	/**
-	 * default constructor needs a predefined properties file to configure Scraper
+	 * default constructor uses properties file to configure Scraper
 	 */
 	public Scraper() {
 		try {
@@ -76,14 +79,14 @@ public class Scraper {
 			config.load(fileInput);
 			fileInput.close();
 			PropertyConfigurator.configure(config.getProperty(LOG4J_LOCATION));
-			outDir = config.getProperty(OUTPUT_DIRECTORY);
 			log = Logger.getLogger("Scraper");
+			outDir = config.getProperty(OUTPUT_DIRECTORY);
 			connection = (HttpURLConnection)(new URL(
 				config.getProperty(BASE_DOMAIN) + ":" 
 				+ config.getProperty(BASE_PORT)).openConnection());
 			if (connection.getResponseCode() == 200) {
 				storeSessionIdCookie(); // create persistent session cookie
-				buildLinksLists(connection); // builds lists of URLs to parse/store
+				buildLinksLists(connection); // builds lists of URLs to parse/scrape
 			} else log.error("Status Code: " + connection.getResponseCode()); 
 		} catch (FileNotFoundException e) {
 			log.error("Properties File Not Found");
@@ -121,8 +124,6 @@ public class Scraper {
 	 * @param connection the HttpURLConnection to use to generate the lists of links
 	 */
 	public void buildLinksLists(HttpURLConnection connection) {
-		linksList = new LinkedHashSet<>();
-		menuLinksList = new LinkedHashSet<>();
 		HTMLEditorKit.Parser parser = new ParserDelegator();
 		try {
 			Reader in = new InputStreamReader(connection.getInputStream());
@@ -135,14 +136,14 @@ public class Scraper {
 							menuLinksList.add("" + link);
 							if ((link.toString().toLowerCase().startsWith("http://")) || 
 								(link.toString().toLowerCase().startsWith("https://"))) {
-								linksList.add("" + link);
+								linksToScrape.add("" + link);
 							} else {
-								linksList.add(config.getProperty(BASE_DOMAIN) + link);
+								linksToScrape.add(config.getProperty(BASE_DOMAIN) + link);
 							}
 						}
 					}
 				}
-			}, true); in.close();
+			}, true); in.close(); // closes upstream connection too
 		} catch (IOException ioe) {
 			log.error("Unable to store data - connection or filesystem errors");
 			ioe.printStackTrace();
@@ -165,16 +166,16 @@ public class Scraper {
 		ElementIterator it = new ElementIterator(doc);
 		kit.read(isr, doc, 0);
 		while ((elem = it.next()) != null) {
-			String l = (String)elem.getAttributes().getAttribute(HTML.Attribute.HREF);
 			String s = (String)elem.getAttributes().getAttribute(HTML.Attribute.SRC);
 			if (s != null && (!s.startsWith("//"))) { // don't include links for //maps or //ajax api's
 				resourcesList.add(s);
 			}
+			String l = (String)elem.getAttributes().getAttribute(HTML.Attribute.HREF);
 			if (l != null) {
 				resourcesList.add(l);
 			}
-			// add code here to add missing script resource for msi
-		} isr.close();
+			// add code here to add missing msi / IE compatibility script resource
+		} isr.close(); // closes upstream connection too
 	}
 	
 	/**
@@ -187,71 +188,68 @@ public class Scraper {
 		String inputLine = null;
 		String suffix = null;
 		String replaceString = null;
-		String resPath = currConnection.getURL().getPath();
-//		String currFileName = currConnection.getURL().getFile();
-//		String modFileName = (resPath.substring(resPath.lastIndexOf("/") + 1) + ".html");
 		BufferedReader br = new BufferedReader(new InputStreamReader(currConnection.getInputStream()));
 		BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
-		log.debug("inFile: " + file);
-//		log.debug("resPath: " + resPath);
-//		log.debug("currFileName: " + currFileName);
-//		log.debug("modFileName: " + modFileName);	
 		while ((inputLine = br.readLine()) != null) {
-			// for non-absolute links on menuLinksList, modify path to proper file
 			for (String currLink : menuLinksList) {
-				if (inputLine.contains(("href=\"" + currLink + "\">")) && 
-						(!inputLine.contains("http://") && !inputLine.contains("https://"))) {
+				if (inputLine.contains(("href=\"" + config.getProperty(BASE_DOMAIN) + "\">"))) {
+					inputLine = inputLine.replace((config.getProperty(BASE_DOMAIN) + "\""), "./index.html\"");
+				}
+				// add code here to fix links like: http://www.siliconmtn.com/innovation/technical-consulting (2 or more subdirs deep)
+				if (inputLine.contains(("href=\"" + currLink + "\">"))) {
 					suffix = currLink.substring(currLink.lastIndexOf("/") + 1);
-					replaceString = "." + currLink + "/" + suffix + ".html"; // modify to relative links on filesystem: input pathToFile
+					if (inputLine.contains("http://") || inputLine.contains("https://")) {
+						replaceString = "." + currConnection.getURL().getPath() + "/" + suffix + "/" + suffix + ".html";
+					} else {
+						replaceString = "." + currLink + "/" + suffix + ".html";
+					}
 					inputLine = inputLine.replace(currLink, replaceString);
 				}
 			}
-			// for non-absolute URLs on resourcesList, add base domain to URL to access resources without downloading them
-			for (String resource : resourcesList) {
+			for (String resource : resourcesList) { // for non-absolute URLs on resourceList
 				if (!(resource.contains("http://") || resource.contains("https://"))) {
 					if (inputLine.contains(resource)) {
 						inputLine = inputLine.replace(resource, (config.getProperty(BASE_DOMAIN) + resource));
 					}
 				}
-			} 
-			// modify absolute URLs contained in menuLinksList
-			for (String newLink : menuLinksList) {
-				if (inputLine.contains(("href=\"" + config.getProperty(BASE_DOMAIN) + "\">"))) {
-					inputLine = inputLine.replace((config.getProperty(BASE_DOMAIN) + "\""), "./index.html\"");
-				}
-				// add code here to get last 2 links on page
-//				if (inputLine.contains(("href=\"" + config.getProperty(BASE_DOMAIN) + "\">"))) {
-//					log.debug("inputLineTest: " + inputLine);
-//					inputLine = inputLine.replace((config.getProperty(BASE_DOMAIN) + "\""), "./index.html\"");
-//					log.debug("outputLineTest: " + inputLine);
-//				}
-				
-				// this code works for top level links - 2nd level links need to be set to go up one directory to work
-				if (inputLine.contains(("href=\"" + config.getProperty(BASE_DOMAIN) + newLink + "\">"))) {
-					log.debug("newLink: " + newLink);
-					log.debug("inputLinePre: " + inputLine);
-					inputLine = inputLine.replace((config.getProperty(BASE_DOMAIN) + newLink), ("." + newLink + newLink + ".html"));
-					log.debug("inputLinePost: " + inputLine);
-				}
 			}
 			out.write(inputLine + "\r\n"); 
 		} out.close();
 	}
+
+	/**
+	 * Format given path to work on local filesystem copy of files
+	 * @param currPath the path to format
+	 */
+	public void pathFormatter(String currPath) {
+		if (currPath.equalsIgnoreCase(fileName) && ((!currPath.equals("") && currPath != null))) {
+			if ((fileName.endsWith(".png")) || fileName.endsWith(".jpg")) {
+				finalOutFile = fileName;
+				pathToFile = Paths.get(outDir + fileName);
+			} else {
+				finalOutFile = fileName.substring(fileName.lastIndexOf("/") + 1);
+				pathToFile = Paths.get(outDir + currPath + "/" + finalOutFile + ".html");	
+			}
+		} else {
+			if (currPath == null || currPath.equals("")) {
+				finalOutFile = "/index.html";
+			} else {
+				finalOutFile = fileName + ".html";
+			}
+			pathToFile = Paths.get(outDir + currPath + finalOutFile);
+		}
+	}
 	
 	/**
-	 * main method runs Scraper
+	 * main method runs Scraper on seed URL from config file
 	 * @param args
 	 */
 	public static void main(String[] args) {
 		Scraper scraper = new Scraper();
 		URL currURL = null;
 		URLConnection currConnection = null;
-		String fileName = null;
-		String path = null;
-		String finalOutFile = null;
-		Path pathToFile = null;
 		try {
-			for (String link : scraper.linksList) { // list of links from base_domain page
+			for (String link : scraper.linksToScrape) {
 				currURL = new URL(link);	
 				currConnection = currURL.openConnection();
 				currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
@@ -259,35 +257,15 @@ public class Scraper {
 					scraper.buildResourcesList((HttpURLConnection)currConnection); // auto-closes connection
 					currConnection = currURL.openConnection();
 					currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
-					path = currURL.getPath();
-					fileName = currURL.getFile();
-					if (path.equalsIgnoreCase(fileName) && ((!path.equals("") && path != null))) {
-						if ((fileName.endsWith(".png")) || fileName.endsWith(".jpg")) {
-							finalOutFile = fileName;
-							pathToFile = Paths.get(scraper.outDir + fileName);
-						} else {
-							finalOutFile = fileName.substring(fileName.lastIndexOf("/") + 1);
-							pathToFile = Paths.get(scraper.outDir + path + "/" + finalOutFile + ".html");	
-						}
-					} else {
-						if (path == null || path.equals("")) {
-							finalOutFile = "/index.html";
-							pathToFile = Paths.get(scraper.outDir + path + finalOutFile);
-						} else {
-							finalOutFile = fileName + ".html";
-							pathToFile = Paths.get(scraper.outDir + path + finalOutFile);
-						}
-					}
-					// build folders up to location of file (if they don't already exist)
-					Files.createDirectories(pathToFile.getParent()); 
-					scraper.storeURLData((HttpURLConnection)currConnection, "" + pathToFile); // auto-closes connection
+					scraper.fileName = currURL.getFile();
+					scraper.pathFormatter(currURL.getPath());
+					Files.createDirectories(scraper.pathToFile.getParent()); // build folder structure up to location of file 
+					scraper.storeURLData((HttpURLConnection)currConnection, "" + scraper.pathToFile); // auto-closes connection
 				} else log.error("Status Code: " + ((HttpURLConnection)currConnection).getResponseCode());
 			}
 		} catch (IOException | BadLocationException e) {
 			log.error("I/O or BadLocationException");
 			e.printStackTrace();
 		}
-		log.debug("linksList: " + scraper.linksList);
-		log.debug("menuLinksList: " + scraper.menuLinksList);	
 	}
 }
