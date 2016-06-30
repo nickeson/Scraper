@@ -73,6 +73,7 @@ public class Scraper {
 
 	/**
 	 * default constructor uses properties file to configure Scraper
+	 * - properties files are located in the scripts subdirectory of the Scraper repository
 	 */
 	public Scraper() {
 		try {
@@ -186,7 +187,7 @@ public class Scraper {
 	 * @param path the path component of the URL being scraped
 	 * @return a modified input line with reformatted links
 	 */
-	protected String menuLinkFormatter(String inputString, String cnxnPath) {
+	protected String menuLinkFormatter(String inputString, int subDirNum) {
 	String replaceString = null;
 		for (String currLink : menuLinksList) {
 			if (inputString.contains(("href=\"" + config.getProperty(BASE_DOMAIN) + "\">"))) {
@@ -196,7 +197,7 @@ public class Scraper {
 			if (inputString.contains(("href=\"" + currLink + "\">"))) {
 				suffix = currLink.substring(currLink.lastIndexOf("/") + 1);
 				if (inputString.contains("http://") || inputString.contains("https://")) {
-					replaceString = "." + cnxnPath + "/" + suffix + "/" + suffix + ".html";
+					replaceString = "." + connectPath + "/" + suffix + "/" + suffix + ".html";
 				} else {
 					replaceString = "." + currLink + "/" + suffix + ".html";
 				}
@@ -230,11 +231,16 @@ public class Scraper {
 	 */
 	protected void storeURLData(HttpURLConnection currConnection, String file) throws IOException {
 		String inputLine = null;
+		int subDirNum = 0;
 		BufferedReader br = new BufferedReader(new InputStreamReader(currConnection.getInputStream()));
 		BufferedWriter out = new BufferedWriter(new FileWriter(new File(file)));
 		while ((inputLine = br.readLine()) != null) {
-		connectPath = currConnection.getURL().getPath();
-			inputLine = menuLinkFormatter(inputLine, connectPath);
+			connectPath = currConnection.getURL().getPath();
+			subDirNum = 0;
+			for(int i = 0; i < connectPath.length(); i++) {
+			    if(connectPath.charAt(i) == '/') subDirNum++;
+			}
+			inputLine = menuLinkFormatter(inputLine, subDirNum);
 			inputLine = resourceListFormatter(inputLine);
 			out.write(inputLine + "\r\n"); 
 		} out.close();
@@ -244,7 +250,7 @@ public class Scraper {
 	 * Format given path to work on local filesystem copy of files
 	 * @param currPath the path to format
 	 */
-	protected void pathFormatter(String currPath) {
+	protected void savePathFormatter(String currPath) {
 		if (currPath.equalsIgnoreCase(fileName) && ((!currPath.equals("") && currPath != null))) {
 			if ((fileName.endsWith(".png")) || fileName.endsWith(".jpg")) {
 				finalOutFile = fileName;
@@ -265,7 +271,7 @@ public class Scraper {
 	
 	/**
 	 * main method runs Scraper on seed URL from config file
-	 * @param args
+	 * @param args parameter does nothing
 	 */
 	public static void main(String[] args) {
 		Scraper scraper = new Scraper();
@@ -281,7 +287,7 @@ public class Scraper {
 					currConnection = currURL.openConnection();
 					currConnection.setRequestProperty("Cookie", scraper.sessionCookie);
 					scraper.fileName = currURL.getFile();
-					scraper.pathFormatter(currURL.getPath());
+					scraper.savePathFormatter(currURL.getPath());
 					Files.createDirectories(scraper.pathToFile.getParent()); // build folder structure up to location of file 
 					scraper.storeURLData((HttpURLConnection)currConnection, "" + scraper.pathToFile); // auto-closes connection
 				} else log.error("Status Code: " + ((HttpURLConnection)currConnection).getResponseCode());
